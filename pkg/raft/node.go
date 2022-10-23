@@ -544,12 +544,12 @@ func (n *Node) Get(input GetInput) (GetOutput, error) {
 	n.cond.L.Lock()
 	defer n.cond.L.Unlock()
 
-	value, ok := n.log.Get(input.Key, false)
-	if !ok || value.Deleted {
+	entry, ok := n.log.Get(input.Key, false)
+	if !ok || entry.Deleted {
 		return GetOutput{}, ErrNotFound
 	}
 
-	return GetOutput{Key: input.Key, Value: value}, nil
+	return GetOutput{Key: input.Key, Value: entry.Value}, nil
 }
 
 // Delete adds an entry to the log indicating the deletion of a key.
