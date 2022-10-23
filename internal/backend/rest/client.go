@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -62,52 +63,78 @@ func (c *Client) Address() *url.URL {
 	return c.url
 }
 
+// Set dispatches a 'Set' request to the remote node.
+func (c *Client) Set(ctx context.Context, input raft.SetInput) error {
+	return do(ctx, c.client, http.MethodPost, c.url.JoinPath(APIV1KV), input, nil)
+}
+
+// Get dispatches a 'Get' request to the remote node.
+func (c *Client) Get(ctx context.Context, input raft.GetInput) (raft.GetOutput, error) {
+	var output raft.GetOutput
+
+	return output, do(ctx, c.client, http.MethodGet, c.url.JoinPath(APIV1KV), input, &output)
+}
+
+// Delete dispatches a 'Delete' request to the remote node.
+func (c *Client) Delete(ctx context.Context, input raft.DeleteInput) error {
+	return do(ctx, c.client, http.MethodDelete, c.url.JoinPath(APIV1KV), input, nil)
+}
+
 // RequestVote dispatches a request vote request to the remote node.
 func (c *Client) RequestVote(ctx context.Context, input raft.RequestVoteInput) (raft.RequestVoteOutput, error) {
-	return do[raft.RequestVoteInput, raft.RequestVoteOutput](
-		ctx,
-		c.client,
-		http.MethodPost,
-		c.url.JoinPath(APIV1RequestVote).String(),
-		input,
-	)
+	var output raft.RequestVoteOutput
+
+	return output, do(ctx, c.client, http.MethodPost, c.url.JoinPath(APIV1RequestVote), input, &output)
 }
 
 // AppendEntries dispatches an append entries request to the remote node.
 func (c *Client) AppendEntries(ctx context.Context, input raft.AppendEntriesInput) (raft.AppendEntriesOutput, error) {
-	return do[raft.AppendEntriesInput, raft.AppendEntriesOutput](
-		ctx,
-		c.client,
-		http.MethodPost,
-		c.url.JoinPath(APIV1AppendEntries).String(),
-		input,
-	)
+	var output raft.AppendEntriesOutput
+
+	return output, do(ctx, c.client, http.MethodPost, c.url.JoinPath(APIV1AppendEntries), input, &output)
 }
 
 // do executes a request to the given url using the provided client/input.
-func do[I, O any](ctx context.Context, client *http.Client, method, url string, input I) (O, error) {
+func do(
+	ctx context.Context,
+	client *http.Client,
+	method string,
+	url *url.URL,
+	input interface{},
+	output interface{},
+) error {
 	body, err := json.Marshal(input)
 	if err != nil {
-		return *new(O), errors.Wrap(err, "failed to marhsal input")
+		return errors.Wrap(err, "failed to marshal input")
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, method, url.String(), bytes.NewReader(body))
 	if err != nil {
-		return *new(O), errors.Wrap(err, "failed to create request")
+		return errors.Wrap(err, "failed to create request")
 	}
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return *new(O), errors.Wrap(err, "failed to execute request")
+		return errors.Wrap(err, "failed to execute request")
 	}
 	defer resp.Body.Close()
 
-	var output O
-
-	err = json.NewDecoder(resp.Body).Decode(&output)
+	body, err = io.ReadAll(resp.Body)
 	if err != nil {
-		return *new(O), errors.Wrap(err, "failed to decode response")
+		return errors.Wrap(err, "failed to read response body")
 	}
 
-	return output, nil
+	if len(body) > 0 && output != nil {
+		err = json.Unmarshal(body, &output)
+	}
+
+	if err != nil {
+		return errors.Wrap(err, "failed to unmarshal output")
+	}
+
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return nil
+	}
+
+	return UnexpectedStatusCodeError{Status: resp.StatusCode, Method: method, Address: url.String(), Body: body}
 }

@@ -1,8 +1,5 @@
 OUTPUT_DIR="build/bin/"
 
-COMMANDS=$(shell ls ./cmd)
-BINARIES?=$(COMMANDS)
-
 PACKAGE=
 TESTS=
 
@@ -10,7 +7,7 @@ all: build
 
 build:
 	@mkdir -p $(OUTPUT_DIR)
-	@for binary in $(BINARIES); do go build -ldflags $(LD_FLAGS) -o $(OUTPUT_DIR) ./cmd/$$binary; done
+	@go build -o $(OUTPUT_DIR)
 
 coverage:
 	@go test ./$(PACKAGE)/... -run=$(TESTS) -count=1 -covermode=atomic -coverprofile=coverage.out -failfast -shuffle=on -tags=test && go tool cover -html=coverage.out

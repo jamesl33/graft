@@ -32,7 +32,7 @@ type NotLeaderError struct {
 	URL *url.URL
 }
 
-// Error implements the 'error' interface returning a useful error indicating wheter the leader node is.
+// Error implements the 'error' interface returning a useful error indicating whether the leader node is.
 func (n NotLeaderError) Error() string {
 	return fmt.Sprintf("not the leader, the leader can be found at %q", n.URL)
 }

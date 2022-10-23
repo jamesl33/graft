@@ -1,4 +1,4 @@
-// Copyright 2022 James Lee <jamesl33info@gmail.com>
+// Copyright 2022 Couchbase Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,47 +14,19 @@
 
 package main
 
-// TODO(jamesl33): CLI
-// TODO(jamesl33): Add support for clean teardown using context
-
 import (
 	"fmt"
-	"net/url"
 	"os"
+	"strconv"
+
+	"github.com/jamesl33/graft/cmd"
+	"github.com/jamesl33/graft/internal/logging"
 
 	"github.com/apex/log"
-	"github.com/jamesl33/graft/internal/backend/rest"
-	"github.com/jamesl33/graft/internal/logging"
-	"github.com/jamesl33/graft/pkg/raft"
+	"github.com/pkg/errors"
 )
 
-func one() {
-	peers := map[raft.Peer]raft.Client{
-		2: rest.NewClient(parse("http://127.0.0.1:8082")),
-		3: rest.NewClient(parse("http://127.0.0.1:8083")),
-	}
-
-	_ = rest.NewServer(raft.NewNode(1, peers)).ListenAndServe(":8081")
-}
-
-func two() {
-	peers := map[raft.Peer]raft.Client{
-		1: rest.NewClient(parse("http://127.0.0.1:8081")),
-		3: rest.NewClient(parse("http://127.0.0.1:8083")),
-	}
-
-	_ = rest.NewServer(raft.NewNode(2, peers)).ListenAndServe(":8082")
-}
-
-func three() {
-	peers := map[raft.Peer]raft.Client{
-		1: rest.NewClient(parse("http://127.0.0.1:8081")),
-		2: rest.NewClient(parse("http://127.0.0.1:8082")),
-	}
-
-	_ = rest.NewServer(raft.NewNode(3, peers)).ListenAndServe(":8083")
-}
-
+// main will setup logging, then execute graft.
 func main() {
 	log.SetHandler(logging.NewHandler())
 
@@ -65,14 +37,18 @@ func main() {
 
 	log.SetLevel(level)
 
-	one()
-}
-
-func parse(host string) *url.URL {
-	parsed, err := url.Parse(host)
-	if err != nil {
-		panic(fmt.Sprintf("failed to parse %q: %v", host, err))
+	err = cmd.Execute()
+	if err == nil {
+		return
 	}
 
-	return parsed
+	// The sub-command failed for some reason, ensure that we exit with a non-zero exit code
+	defer os.Exit(1)
+
+	stacktrace := os.Getenv("GRAFT_DISPLAY_STACKTRACE")
+	if display, _ := strconv.ParseBool(stacktrace); display {
+		fmt.Printf("Error: %+v\n", err)
+	} else {
+		fmt.Printf("Error: %s\n", errors.Cause(err))
+	}
 }

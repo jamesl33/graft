@@ -78,7 +78,7 @@ type Node struct {
 	// into a signal channel where required.
 	triggerReplication *sync.Cond
 
-	// lastElectionEvent is the time at which the election event occured (i.e. to defer an election from taking place)
+	// lastElectionEvent is the time at which the election event occurred (i.e. to defer an election from taking place)
 	lastElectionEvent time.Time
 }
 
@@ -496,7 +496,7 @@ func (n *Node) performAppendEntries(
 }
 
 // updateCommitIndex updates the commit index when log entries have been replicated to a quorum of nodes.
-func (n *Node) updateCommitIndex() bool {
+func (n *Node) updateCommitIndex() {
 	saved := n.commitIndex
 
 	for idx := saved + 1; idx < len(n.log); idx++ {
@@ -508,15 +508,13 @@ func (n *Node) updateCommitIndex() bool {
 	}
 
 	if n.commitIndex == saved {
-		return false
+		return
 	}
 
 	log.WithField("index", n.commitIndex).Info("Updated commit index")
 
 	// Wake up any goroutines waiting for replication before responding to a 'Set'
 	n.cond.Broadcast()
-
-	return true
 }
 
 // Set creates a new entry in the log and triggers replication.
