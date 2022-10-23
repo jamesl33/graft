@@ -15,4 +15,4 @@
 package raft
 
 // Peer is the identifier of a peer node in the cluster.
-type Peer int
+type Peer uint
