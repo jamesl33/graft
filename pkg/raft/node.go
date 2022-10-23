@@ -69,11 +69,8 @@ type Node struct {
 	// NOTE: Reinitialised upon election as leader.
 	matchIndexes map[Peer]int
 
-	// mu guards access to internal state.
-	mu sync.Mutex
-
-	// updatedCommitIndex signifies that the commit index has been updated.
-	updatedCommitIndex *sync.Cond
+	// cond guards access to internal state.
+	cond *sync.Cond
 
 	// triggerReplication allows triggering of replication after a call to 'Set'.
 	//
@@ -94,7 +91,7 @@ func NewNode(id Peer, peers map[Peer]Client) *Node {
 		commitIndex:        -1,
 		peers:              maps.Keys(peers),
 		clients:            make(map[Peer]Client),
-		updatedCommitIndex: sync.NewCond(&sync.Mutex{}),
+		cond:               sync.NewCond(&sync.Mutex{}),
 		triggerReplication: sync.NewCond(&sync.Mutex{}),
 	}
 
@@ -127,8 +124,8 @@ func (n *Node) start() {
 //
 // NOTE: This method is thread safe.
 func (n *Node) getState() State {
-	n.mu.Lock()
-	defer n.mu.Unlock()
+	n.cond.L.Lock()
+	defer n.cond.L.Unlock()
 
 	return n.state
 }
@@ -137,8 +134,8 @@ func (n *Node) getState() State {
 //
 // NOTE: This method is thread safe.
 func (n *Node) getTerm() Term {
-	n.mu.Lock()
-	defer n.mu.Unlock()
+	n.cond.L.Lock()
+	defer n.cond.L.Unlock()
 
 	return n.term
 }
@@ -147,8 +144,8 @@ func (n *Node) getTerm() Term {
 //
 // NOTE: This method is thread safe.
 func (n *Node) lastIndexAndTerm() (int, Term) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
+	n.cond.L.Lock()
+	defer n.cond.L.Unlock()
 
 	return n.lastIndexAndTermLocked()
 }
@@ -216,8 +213,8 @@ func (n *Node) runElectionTimer() {
 
 	<-time.After(timeout)
 
-	n.mu.Lock()
-	defer n.mu.Unlock()
+	n.cond.L.Lock()
+	defer n.cond.L.Unlock()
 
 	if !(n.state == StateFollower || n.state == StateCandidate) || n.term != term {
 		return
@@ -250,8 +247,8 @@ func (n *Node) campaign() {
 
 	// handle the request vote output.
 	handle := func(output RequestVoteOutput) {
-		n.mu.Lock()
-		defer n.mu.Unlock()
+		n.cond.L.Lock()
+		defer n.cond.L.Unlock()
 
 		switch {
 		case n.state != StateCandidate:
@@ -386,7 +383,7 @@ func (n *Node) replicate() {
 
 // replicateToPeer replicates the log to the given peer.
 func (n *Node) replicateToPeer(ctx context.Context, term Term, peer Peer) bool {
-	n.mu.Lock()
+	n.cond.L.Lock()
 
 	var (
 		nextIndex = n.nextIndexes[peer]
@@ -411,7 +408,7 @@ func (n *Node) replicateToPeer(ctx context.Context, term Term, peer Peer) bool {
 		CommitIndex:      n.commitIndex,
 	}
 
-	n.mu.Unlock()
+	n.cond.L.Unlock()
 
 	client, ok := n.clients[peer]
 	if !ok {
@@ -424,8 +421,8 @@ func (n *Node) replicateToPeer(ctx context.Context, term Term, peer Peer) bool {
 		return false
 	}
 
-	n.mu.Lock()
-	defer n.mu.Unlock()
+	n.cond.L.Lock()
+	defer n.cond.L.Unlock()
 
 	// Other node is further ahead, become a follower and stop replication
 	if output.Term > n.term {
@@ -454,14 +451,7 @@ func (n *Node) replicateToPeer(ctx context.Context, term Term, peer Peer) bool {
 	n.nextIndexes[peer] = nextIndex + len(input.Entries)
 	n.matchIndexes[peer] = n.nextIndexes[peer] - 1
 
-	if !n.updateCommitIndex() {
-		return false
-	}
-
-	log.WithField("index", n.commitIndex).Info("Updated commit index")
-
-	// Wake up any goroutines waiting for replication before responding to a 'Set'
-	n.updatedCommitIndex.Broadcast()
+	n.updateCommitIndex()
 
 	return false
 }
@@ -499,13 +489,22 @@ func (n *Node) updateCommitIndex() bool {
 		n.commitIndex = idx
 	}
 
-	return n.commitIndex != saved
+	if n.commitIndex == saved {
+		return false
+	}
+
+	log.WithField("index", n.commitIndex).Info("Updated commit index")
+
+	// Wake up any goroutines waiting for replication before responding to a 'Set'
+	n.cond.Broadcast()
+
+	return true
 }
 
 // Set creates a new entry in the log and triggers replication.
 func (n *Node) Set(input SetInput) error {
-	n.mu.Lock()
-	defer n.mu.Unlock()
+	n.cond.L.Lock()
+	defer n.cond.L.Unlock()
 
 	if n.state != StateLeader {
 		return n.notLeaderLocked()
@@ -524,8 +523,8 @@ func (n *Node) Set(input SetInput) error {
 //
 // NOTE: System entries will not be returned.
 func (n *Node) Get(input GetInput) (GetOutput, error) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
+	n.cond.L.Lock()
+	defer n.cond.L.Unlock()
 
 	value, ok := n.log.Get(input.Key, false)
 	if !ok || value.Deleted {
@@ -539,8 +538,8 @@ func (n *Node) Get(input GetInput) (GetOutput, error) {
 //
 // NOTE: This is a tombstone; both the entry and the tombstone will remain indefinitely.
 func (n *Node) Delete(input DeleteInput) error {
-	n.mu.Lock()
-	defer n.mu.Unlock()
+	n.cond.L.Lock()
+	defer n.cond.L.Unlock()
 
 	if n.state != StateLeader {
 		return n.notLeaderLocked()
@@ -565,7 +564,7 @@ func (n *Node) setLocked(entry Entry) error {
 	n.triggerReplication.Broadcast()
 
 	for idx := len(n.log) - 1; n.commitIndex < idx; {
-		n.updatedCommitIndex.Wait()
+		n.cond.Wait()
 	}
 
 	return nil
@@ -594,8 +593,8 @@ func (n *Node) AppendEntries(input AppendEntriesInput) (AppendEntriesOutput, err
 
 // appendEntries performs client side log replication and transitions state where required.
 func (n *Node) appendEntries(input AppendEntriesInput) AppendEntriesOutput {
-	n.mu.Lock()
-	defer n.mu.Unlock()
+	n.cond.L.Lock()
+	defer n.cond.L.Unlock()
 
 	// If AppendEntries RPC received from new leader: convert to follower
 	if input.Term > n.term {
@@ -666,8 +665,8 @@ func (n *Node) RequestVote(input RequestVoteInput) (RequestVoteOutput, error) {
 
 // requestVote casts this nodes vote and transitions state where required.
 func (n *Node) requestVote(input RequestVoteInput) RequestVoteOutput {
-	n.mu.Lock()
-	defer n.mu.Unlock()
+	n.cond.L.Lock()
+	defer n.cond.L.Unlock()
 
 	lastIndex, lastTerm := n.lastIndexAndTermLocked()
 
