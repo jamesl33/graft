@@ -161,7 +161,15 @@ func (n *Node) lastIndexAndTermLocked() (int, Term) {
 	return idx, n.log[idx].Term
 }
 
-// transitionLOCKED transitions the node into the given state and sets the term to that provided.
+// transition transitions the node into the given state and sets the term to that provided.
+func (n *Node) transition(state State, term Term) {
+	n.cond.L.Lock()
+	defer n.cond.L.Unlock()
+
+	n.transitionLocked(state, term)
+}
+
+// transitionLocked transitions the node into the given state and sets the term to that provided.
 func (n *Node) transitionLocked(state State, term Term) {
 	fields := log.Fields{
 		"id":    n.id,
@@ -229,6 +237,11 @@ func (n *Node) runElectionTimer() {
 
 // campaign triggers a leadership election where the current node is the candidate.
 func (n *Node) campaign() {
+	if len(n.peers) == 0 {
+		n.transition(StateLeader, n.term)
+		return
+	}
+
 	var (
 		term         = n.getTerm()
 		votes uint64 = 1
@@ -256,7 +269,7 @@ func (n *Node) campaign() {
 		case output.Term > term:
 			// Other node is further ahead, become a follower
 			n.transitionLocked(StateFollower, output.Term)
-		case output.Term == term && output.Granted && atomic.AddUint64(&votes, 1)*2 > uint64(len(n.peers)+1):
+		case output.Term == term && output.Granted && n.haveQuorum(int(atomic.AddUint64(&votes, 1))):
 			// Received a majority of votes, become the leader
 			n.transitionLocked(StateLeader, n.term)
 		}
@@ -347,6 +360,11 @@ func (n *Node) replicationTrigger(ctx context.Context, signal chan<- struct{}) {
 
 // replicate replicates the log to the other cluster nodes (and acts as a heartbeat).
 func (n *Node) replicate() {
+	if len(n.peers) == 0 {
+		n.updateCommitIndex()
+		return
+	}
+
 	var (
 		term = n.getTerm()
 		stop = errors.New("stop") // Cancel replication early, used only as a sentinel error
@@ -709,7 +727,12 @@ func (n *Node) replicatedToMajorityLocked(idx int) bool {
 		}
 	}
 
-	return count*2 > len(n.peers)+1
+	return n.haveQuorum(count)
+}
+
+// haveQuorum returns a boolean indicating if we have a quorum of nodes.
+func (n *Node) haveQuorum(nodes int) bool {
+	return nodes*2 > len(n.peers)+1
 }
 
 // notLeaderLocked returns the most informative error possible indicating this node isn't the leader.
