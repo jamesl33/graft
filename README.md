@@ -88,7 +88,7 @@ To Do
 - [ ] Implement persistent storage
 - [ ] Implement log compaction/snapshotting
 - [ ] Implement node addition/removal
-- [ ] Disallow protocol request which originate from outside the cluster
+- [ ] Disallow protocol requests which originate from outside the cluster
 - [ ] Add an RPC/gRPC backend
 - [ ] Optimise bulk log replication
 
